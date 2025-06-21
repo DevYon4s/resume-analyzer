@@ -1,0 +1,208 @@
+{
+  "name": "My workflow 2",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "resume-upload",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [60, 60],
+      "id": "8d1bd6ad-5b9e-4a46-afbc-bf8fe2813fd6",
+      "name": "Webhook",
+      "webhookId": "2aa8eb70-55ef-4913-ae7b-34c81c2c09ea"
+    },
+    {
+      "parameters": {
+        "filePath": "={{ $json.filePath }}"
+      },
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [460, 60],
+      "id": "522f9f51-9487-45d5-a407-4b21140e896a",
+      "name": "Read Binary File"
+    },
+    {
+      "parameters": {
+        "functionCode": "return [{ \n  json: { \n    resumeText: $json, \n    filename: $json.filename \n  } \n}];\n"
+      },
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [860, 60],
+      "id": "1d30f37d-34a8-4771-86a0-34fa05edd368",
+      "name": "Function1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO resumes \n(filename, full_name, email, phone, skills, experience_years, last_job_title) \nVALUES (\n  $1, $2, $3, $4, \n  (SELECT array_agg(value::text) FROM jsonb_array_elements_text($5::jsonb) AS value), \n  $6, $7\n)\n",
+        "options": {
+          "queryReplacement": "={{$json.filename}},{{$json.full_name}},{{$json.email}},{{$json.phone}},{{ JSON.stringify($json.skills) }}\n\n,{{$json.experience_years}},{{$json.last_job_title}}\n\n"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1520, 80],
+      "id": "a870049a-9cb4-49d8-8c0d-4cca2c783d1b",
+      "name": "Postgres",
+      "credentials": {
+        "postgres": {
+          "id": "WyKHk28EzLcPY7Hz",
+          "name": "Postgres account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=add_your_gemin_api_key_here\n\n",
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={   \"contents\": [     {       \"parts\": [         {           \"text\": \"Please extract the following information from the resume text provided below:\\n\\n- full_name (string)\\n- email (string)\\n- phone (string)\\n- skills (array of strings)\\n- experience_years (float)\\n- last_job_title (string)\\n\\nReturn the output in a clean JSON format.\\n\\nHere is the resume text:\\n\\n{{ $('Function1').item.json.resumeText.data }}\"         }       ]     }   ],   \"generationConfig\": {     \"responseMimeType\": \"application/json\"   } }",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 60],
+      "id": "38daca65-eec9-48e1-8661-5b853e9aca32",
+      "name": "Gemini api"
+    },
+    {
+      "parameters": {
+        "functionCode": "const backendPath = $node[\"Webhook\"].json.body.file_path;\nconst filename = $node[\"Webhook\"].json.body.filename;\nconst n8nPath = backendPath.replace(\"./uploaded\", \"/app/uploaded\");\nreturn [{ json: { filePath: n8nPath, filename } }];\n"
+      },
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [260, 60],
+      "id": "62f039d1-6f6e-4b0f-b9b4-68b80e4dd112",
+      "name": "Function to get the file name and path from the webhook"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "http://tika:9998/tika",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "text/plain"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [660, 60],
+      "id": "4b1493d9-ba20-44d6-9e66-97a6a311b7db",
+      "name": "HTTP Request to tika to parse the pdf"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract filePath from JSON part of the item\nconst fullPath = items[0].json.filePath || '';\nlet filename = fullPath.split('/').pop() || null;\n\n// Extract AI response text from JSON part of the item\nconst aiResponse = items[0].json;\n\nlet text;\ntry {\n  text = aiResponse.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (!text) {\n    throw new Error(\"No AI response text found.\");\n  }\n} catch (error) {\n  throw new Error(\"Failed to extract text from AI response: \" + error.message);\n}\n\n// Parse JSON string\nlet parsedData;\ntry {\n  parsedData = JSON.parse(text);\n} catch (error) {\n  throw new Error(\"Failed to parse AI JSON text: \" + error.message);\n}\n\n// Handle missing full_name safely\nconst fullName = parsedData.full_name || 'Unknown';\n\n// Generate filename if missing\nif (!filename || filename.trim() === '') {\n  const safeName = fullName.replace(/[^a-zA-Z0-9-_]/g, '_');\n  filename = `${safeName}_resume.pdf`;\n}\n\n// Prepare final cleaned data, with safe defaults\nconst cleanedData = {\n  filename: filename,\n  full_name: fullName,\n  email: parsedData.email || '',\n  phone: parsedData.phone || '',\n  skills: Array.isArray(parsedData.skills) ? parsedData.skills : [],\n  experience_years: parsedData.experience_years || 0,\n  last_job_title: parsedData.last_job_title || '',\n};\n\nreturn [\n  {\n    json: cleanedData\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 80],
+      "id": "375d2d00-d9a9-457a-9fca-7d8d28de6068",
+      "name": "extract info from the api response"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Function to get the file name and path from the webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Binary File": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request to tika to parse the pdf",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function1": {
+      "main": [
+        [
+          {
+            "node": "Gemini api",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini api": {
+      "main": [
+        [
+          {
+            "node": "extract info from the api response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function to get the file name and path from the webhook": {
+      "main": [
+        [
+          {
+            "node": "Read Binary File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request to tika to parse the pdf": {
+      "main": [
+        [
+          {
+            "node": "Function1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "extract info from the api response": {
+      "main": [
+        [
+          {
+            "node": "Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "cc59086b-0d03-4f93-bd43-286c11f51645",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "40c97ab74b9db62e0d31b413dc81dbd80de4967a28173a6368b5f6233eb77d21"
+  },
+  "id": "AxeTI8jr4dcmsaiD",
+  "tags": []
+}
